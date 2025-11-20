@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>HyperFlash Monitor</title>
+    <style>
+        body { background: #0d1117; color: #c9d1d9; font-family: 'Courier New', monospace; padding: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .header { border-bottom: 1px solid #30363d; padding-bottom: 10px; margin-bottom: 20px; display: flex; justify-content: space-between; align-items: center; }
+        h1 { margin: 0; font-size: 1.5rem; color: #58a6ff; }
+        
+        .control-panel { background: #161b22; padding: 15px; border-radius: 6px; border: 1px solid #30363d; margin-bottom: 20px; }
+        button { background: #238636; color: white; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        button:hover { background: #2ea043; }
+        
+        .order-list { display: flex; flex-direction: column; gap: 10px; }
+        .order-card { background: #161b22; border: 1px solid #30363d; padding: 15px; border-radius: 6px; animation: fadeIn 0.3s; }
+        .order-header { display: flex; justify-content: space-between; margin-bottom: 10px; font-weight: bold; }
+        
+        .status-steps { display: flex; gap: 5px; margin-top: 10px; }
+        .step { flex: 1; background: #21262d; text-align: center; padding: 4px; font-size: 0.8rem; border-radius: 2px; color: #8b949e; }
+        .step.active { background: #1f6feb; color: white; animation: pulse 1s infinite; }
+        .step.done { background: #238636; color: white; }
+        .step.fail { background: #da3633; color: white; }
+
+        .logs { font-size: 0.85rem; margin-top: 8px; color: #8b949e; }
+
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>⚡ HyperFlash Terminal</h1>
+            <span id="connection-status" style="color: #da3633;">● Disconnected</span>
+        </div>
+
+        <div class="control-panel">
+            <h3>🚀 Submit Order</h3>
+            <div style="display: flex; gap: 10px; align-items: center;">
+                <select id="tokenIn" style="padding: 8px; background: #0d1117; color: white; border: 1px solid #30363d;">
+                    <option value="SOL">SOL</option>
+                    <option value="ETH">ETH</option>
+                    <option value="BTC">BTC</option>
+                </select>
+                <span>➔</span>
+                <select id="tokenOut" style="padding: 8px; background: #0d1117; color: white; border: 1px solid #30363d;">
+                    <option value="USDC">USDC</option>
+                    <option value="USDT">USDT</option>
+                </select>
+                <input type="number" id="amount" value="1" style="padding: 8px; width: 80px; background: #0d1117; color: white; border: 1px solid #30363d;">
+                <button onclick="submitOrder()">EXECUTE TRADE</button>
+            </div>
+        </div>
+
+        <div id="orders" class="order-list">
+            </div>
+    </div>
+
+    <script>
+        async function submitOrder() {
+            const tokenIn = document.getElementById('tokenIn').value;
+            const tokenOut = document.getElementById('tokenOut').value;
+            const amount = parseFloat(document.getElementById('amount').value);
+
+            const res = await fetch('http://localhost:3000/api/orders', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tokenIn, tokenOut, amount })
+            });
+            
+            const data = await res.json();
+            createOrderCard(data.orderId, tokenIn, tokenOut, amount);
+            connectWebSocket(data.orderId);
+        }
+
+        function createOrderCard(id, inToken, outToken, amt) {
+            const div = document.createElement('div');
+            div.className = 'order-card';
+            div.id = `card-${id}`;
+            div.innerHTML = `
+                <div class="order-header">
+                    <span>Order #${id.split('-')[0]}...</span>
+                    <span>${amt} ${inToken} ➔ ${outToken}</span>
+                </div>
+                <div class="status-steps" id="steps-${id}">
+                    <div class="step active" id="step-PENDING-${id}">PENDING</div>
+                    <div class="step" id="step-ROUTING-${id}">ROUTING</div>
+                    <div class="step" id="step-BUILDING-${id}">BUILDING</div>
+                    <div class="step" id="step-SUBMITTED-${id}">SUBMITTED</div>
+                    <div class="step" id="step-CONFIRMED-${id}">CONFIRMED</div>
+                </div>
+                <div class="logs" id="log-${id}">Waiting for processor...</div>
+            `;
+            document.getElementById('orders').prepend(div);
+        }
+
+        function connectWebSocket(orderId) {
+            const ws = new WebSocket(`ws://localhost:3000/api/ws/orders?orderId=${orderId}`);
+            
+            ws.onopen = () => {
+                document.getElementById('connection-status').style.color = '#238636';
+                document.getElementById('connection-status').innerText = '● Connected';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateStatus(data.orderId, data.status, data);
+            };
+        }
+
+        function updateStatus(id, status, data) {
+            const steps = ['PENDING', 'ROUTING', 'BUILDING', 'SUBMITTED', 'CONFIRMED'];
+            const currentIdx = steps.indexOf(status);
+            
+            // Update step visuals
+            steps.forEach((step, idx) => {
+                const el = document.getElementById(`step-${step}-${id}`);
+                if (!el) return;
+                
+                if (idx < currentIdx) {
+                    el.className = 'step done';
+                } else if (idx === currentIdx) {
+                    el.className = 'step active';
+                } else {
+                    el.className = 'step';
+                }
+            });
+
+            // Update logs
+            const logEl = document.getElementById(`log-${id}`);
+            if (status === 'ROUTING') logEl.innerText = "🔍 Searching for best price on Raydium/Meteora...";
+            if (status === 'CONFIRMED') {
+                 document.getElementById(`step-CONFIRMED-${id}`).className = 'step done';
+                 logEl.innerText = `✅ Executed at $${data.price?.toFixed(2)} (Tx: ${data.txHash})`;
+                 logEl.style.color = '#238636';
+            }
+            if (status === 'FAILED') {
+                logEl.innerText = `❌ Failed: ${data.reason}`;
+                logEl.style.color = '#da3633';
+            }
+        }
+    </script>
+</body>
+</html>
