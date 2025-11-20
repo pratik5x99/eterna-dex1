@@ -1,25 +1,32 @@
 import { IDexProvider, Quote } from './IDexProvider';
 import { MockRaydium, MockMeteora } from '../../infrastructure/dex/MockDexProvider';
+import { RealRaydium, RealMeteora } from '../../infrastructure/dex/RealDexProvider';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 export class SmartRouter {
   private providers: IDexProvider[];
 
   constructor() {
-    // We inject our mock providers here
-    this.providers = [MockRaydium, MockMeteora];
+    const mode = process.env.EXECUTION_MODE || 'mock';
+    console.log(`🚀 Router initializing in ${mode.toUpperCase()} mode`);
+
+    if (mode === 'real') {
+      // Use Real Solana Connection
+      this.providers = [RealRaydium, RealMeteora];
+    } else {
+      // Use Mock
+      this.providers = [MockRaydium, MockMeteora];
+    }
   }
 
   async getBestQuote(tokenIn: string, tokenOut: string, amount: number): Promise<Quote> {
-    console.log(`🚀 [Router] Routing ${amount} ${tokenIn} -> ${tokenOut}...`);
+    console.log(`[Router] Routing ${amount} ${tokenIn} -> ${tokenOut}...`);
 
-    // Query all providers in parallel (Efficiency!)
     const quotePromises = this.providers.map(p => p.getQuote(tokenIn, tokenOut, amount));
     const quotes = await Promise.all(quotePromises);
 
-    // Find the best price (Lowest price if buying, but for this mock we assume buying so lower is better? 
-    // Actually, usually higher return is better. Let's assume we want the Lowest Price for buying X with Y)
-    // Let's keep it simple: We want the LOWEST price.
-    
     let bestQuote = quotes[0];
     for (const quote of quotes) {
       console.log(`   - ${quote.dexName}: $${quote.price.toFixed(2)}`);
